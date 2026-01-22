@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Automated JUGS Machine",
+    "slug": "automated-jugs-machine",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "automated-jugs-machine",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0f0d"
+      }
+    }
+  }
+}
