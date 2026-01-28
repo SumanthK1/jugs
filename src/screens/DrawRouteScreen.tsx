@@ -21,6 +21,8 @@ export function DrawRouteScreen({ navigation }: Props) {
   // 30Hz sampling balances smoothness with overhead on mobile.
   const samplingHz = 30;
   const samplingIntervalMs = 1000 / samplingHz;
+  const fieldWidthYards = 53.3;
+  const fieldLengthYards = 60;
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPath, setCurrentPath] = useState<Point[]>([]);
@@ -49,6 +51,16 @@ export function DrawRouteScreen({ navigation }: Props) {
   }, [isDrawing]);
 
   useEffect(() => {
+    if (fieldSize.width > 0 && fieldSize.height > 0) {
+      // Fixed origin: center of field on x-axis, bottom of field on y-axis.
+      originRef.current = {
+        x: fieldSize.width / 2,
+        y: fieldSize.height,
+      };
+    }
+  }, [fieldSize.height, fieldSize.width]);
+
+  useEffect(() => {
     if (showInvalidMessage) {
       const timer = setTimeout(() => {
         setShowInvalidMessage(false);
@@ -74,8 +86,11 @@ export function DrawRouteScreen({ navigation }: Props) {
             typeof evt.nativeEvent.timestamp === 'number'
               ? evt.nativeEvent.timestamp
               : Date.now();
-          originRef.current = { x: locationX, y: locationY };
-          localRouteRef.current = [{ x: 0, y: 0 }];
+          // Route can start anywhere; origin is fixed at field center/bottom.
+          const origin = originRef.current;
+          localRouteRef.current = origin
+            ? [{ x: locationX - origin.x, y: origin.y - locationY }]
+            : [];
           lastSampleTimeRef.current = now;
           setIsDrawing(true);
           updateCurrentPath([{ x: locationX, y: locationY }]);
@@ -87,30 +102,28 @@ export function DrawRouteScreen({ navigation }: Props) {
             typeof evt.nativeEvent.timestamp === 'number'
               ? evt.nativeEvent.timestamp
               : Date.now();
-          if (now - lastSampleTimeRef.current < samplingIntervalMs) return;
-          lastSampleTimeRef.current = now;
-
           const origin = originRef.current;
           if (!origin) return;
           const newPath = [
             ...currentPathRef.current,
             { x: locationX, y: locationY },
           ];
-          const newLocalRoute = [
-            ...localRouteRef.current,
-            { x: locationX - origin.x, y: locationY - origin.y },
-          ];
 
           if (pathCrossesItself(newPath)) {
             setIsDrawing(false);
             updateCurrentPath([]);
             localRouteRef.current = [];
-            originRef.current = null;
             setShowInvalidMessage(true);
             return;
           }
 
-          localRouteRef.current = newLocalRoute;
+          if (now - lastSampleTimeRef.current >= samplingIntervalMs) {
+            localRouteRef.current = [
+              ...localRouteRef.current,
+              { x: locationX - origin.x, y: origin.y - locationY },
+            ];
+            lastSampleTimeRef.current = now;
+          }
           updateCurrentPath(newPath);
         },
         onPanResponderRelease: () => {
@@ -120,13 +133,16 @@ export function DrawRouteScreen({ navigation }: Props) {
           if (currentPathRef.current.length < 10) {
             updateCurrentPath([]);
             localRouteRef.current = [];
-            originRef.current = null;
             setShowInvalidMessage(true);
           } else {
-            const finalPoint =
-              localRouteRef.current[localRouteRef.current.length - 1] ?? null;
-            console.log('Route points (local):', localRouteRef.current);
-            console.log('Final point (local):', finalPoint);
+            const origin = originRef.current;
+            if (origin) {
+              const lastPoint = currentPathRef.current[currentPathRef.current.length - 1];
+              localRouteRef.current = [
+                ...localRouteRef.current,
+                { x: lastPoint.x - origin.x, y: origin.y - lastPoint.y },
+              ];
+            }
             setShowConfirmDialog(true);
           }
         },
@@ -136,13 +152,16 @@ export function DrawRouteScreen({ navigation }: Props) {
           if (currentPathRef.current.length < 10) {
             updateCurrentPath([]);
             localRouteRef.current = [];
-            originRef.current = null;
             setShowInvalidMessage(true);
           } else {
-            const finalPoint =
-              localRouteRef.current[localRouteRef.current.length - 1] ?? null;
-            console.log('Route points (local):', localRouteRef.current);
-            console.log('Final point (local):', finalPoint);
+            const origin = originRef.current;
+            if (origin) {
+              const lastPoint = currentPathRef.current[currentPathRef.current.length - 1];
+              localRouteRef.current = [
+                ...localRouteRef.current,
+                { x: lastPoint.x - origin.x, y: origin.y - lastPoint.y },
+              ];
+            }
             setShowConfirmDialog(true);
           }
         },
@@ -151,10 +170,26 @@ export function DrawRouteScreen({ navigation }: Props) {
   );
 
   const handleConfirmYes = () => {
+    const roundedRoute = localRouteRef.current
+      .map(pixelsToYards)
+      .filter((point): point is Point => point !== null)
+      .map(point => ({
+        x: round3(point.x),
+        y: round3(point.y),
+      }));
+    const finalPoint = roundedRoute[roundedRoute.length - 1] ?? null;
+
+    const pointsPreview = roundedRoute.map(formatPoint).join(', ');
+    const output = [
+      'Route (local yards, origin at JUGS center x=0, y=0):',
+      `Points (${roundedRoute.length}): [${pointsPreview}]`,
+      `Final: ${finalPoint ? formatPoint(finalPoint) : 'N/A'}`,
+    ].join('\n');
+    console.log(output);
+
     setAllPaths([...allPathsRef.current, currentPathRef.current]);
     updateCurrentPath([]);
     localRouteRef.current = [];
-    originRef.current = null;
     setShowConfirmDialog(false);
     navigation.navigate('Loading');
   };
@@ -162,7 +197,6 @@ export function DrawRouteScreen({ navigation }: Props) {
   const handleConfirmNo = () => {
     updateCurrentPath([]);
     localRouteRef.current = [];
-    originRef.current = null;
     setShowConfirmDialog(false);
   };
 
@@ -182,7 +216,23 @@ export function DrawRouteScreen({ navigation }: Props) {
     [allPaths],
   );
 
-  const yardLineSpacing = fieldSize.height / 11;
+  const segmentCount = Math.max(1, Math.round(fieldLengthYards / 10));
+  const yardLineSpacing = fieldSize.height / segmentCount;
+  const xScale = fieldSize.width / fieldWidthYards;
+  const yScale = yardLineSpacing === 0 ? 0 : yardLineSpacing / 10;
+
+  const pixelsToYards = (pixelPoint: Point) => {
+    if (xScale === 0 || yScale === 0) return null;
+    return {
+      x: pixelPoint.x / xScale,
+      y: pixelPoint.y / yScale,
+    };
+  };
+
+  const round3 = (value: number) => Number(value.toFixed(3));
+
+  const formatPoint = (point: Point) =>
+    `(${point.x.toFixed(3)}, ${point.y.toFixed(3)})`;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -232,7 +282,7 @@ export function DrawRouteScreen({ navigation }: Props) {
                 ),
               )}
 
-              {Array.from({ length: 12 }).map((_, index) => {
+              {Array.from({ length: segmentCount + 1 }).map((_, index) => {
                 const y = index * yardLineSpacing;
                 return (
                   <Line
@@ -247,7 +297,8 @@ export function DrawRouteScreen({ navigation }: Props) {
                 );
               })}
 
-              {Array.from({ length: 10 }).map((_, rowIndex) => {
+              {Array.from({ length: Math.max(0, segmentCount - 1) }).map(
+                (_, rowIndex) => {
                 const y = (rowIndex + 1) * yardLineSpacing;
                 return Array.from({ length: 9 }).map((__, colIndex) => {
                   const x = (fieldSize.width * (colIndex + 1)) / 10;
@@ -265,10 +316,9 @@ export function DrawRouteScreen({ navigation }: Props) {
                 });
               })}
 
-              {Array.from({ length: 5 }).map((_, index) => {
-                const lineIndex = 10 - index * 2;
-                const y = lineIndex * yardLineSpacing;
+              {Array.from({ length: segmentCount }).map((_, index) => {
                 const yardNumber = (index + 1) * 10;
+                const y = fieldSize.height - yardNumber / 10 * yardLineSpacing;
                 return (
                   <SvgText
                     key={`yard-text-${index}`}
@@ -297,6 +347,25 @@ export function DrawRouteScreen({ navigation }: Props) {
                 height={yardLineSpacing}
                 fill="rgba(0, 0, 0, 0.2)"
               />
+
+              {/* JUGS machine marker at (0,0) => bottom-center */}
+              <Circle
+                cx={fieldSize.width / 2}
+                cy={fieldSize.height - 8}
+                r={6}
+                fill="#FFD700"
+                stroke="#0a0f0d"
+                strokeWidth={2}
+              />
+              <SvgText
+                x={fieldSize.width / 2}
+                y={fieldSize.height - 20}
+                fill="rgba(255,255,255,0.7)"
+                fontSize={12}
+                textAnchor="middle"
+              >
+                JUGS
+              </SvgText>
 
               {confirmedPaths.map((path, index) => (
                 <Path
