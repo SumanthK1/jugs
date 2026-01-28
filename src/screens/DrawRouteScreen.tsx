@@ -18,6 +18,10 @@ import { pathCrossesItself, pointsToSvgPath, Point } from '../utils/routeValidat
 type Props = NativeStackScreenProps<RootStackParamList, 'DrawRoute'>;
 
 export function DrawRouteScreen({ navigation }: Props) {
+  // 30Hz sampling balances smoothness with overhead on mobile.
+  const samplingHz = 30;
+  const samplingIntervalMs = 1000 / samplingHz;
+
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPath, setCurrentPath] = useState<Point[]>([]);
   const [allPaths, setAllPaths] = useState<Point[][]>([]);
@@ -26,6 +30,9 @@ export function DrawRouteScreen({ navigation }: Props) {
   const [fieldSize, setFieldSize] = useState({ width: 0, height: 0 });
 
   const currentPathRef = useRef<Point[]>([]);
+  const localRouteRef = useRef<Point[]>([]);
+  const originRef = useRef<Point | null>(null);
+  const lastSampleTimeRef = useRef<number>(0);
   const allPathsRef = useRef<Point[][]>([]);
   const isDrawingRef = useRef(false);
 
@@ -63,24 +70,47 @@ export function DrawRouteScreen({ navigation }: Props) {
         onPanResponderGrant: evt => {
           if (allPathsRef.current.length > 0) return;
           const { locationX, locationY } = evt.nativeEvent;
+          const now =
+            typeof evt.nativeEvent.timestamp === 'number'
+              ? evt.nativeEvent.timestamp
+              : Date.now();
+          originRef.current = { x: locationX, y: locationY };
+          localRouteRef.current = [{ x: 0, y: 0 }];
+          lastSampleTimeRef.current = now;
           setIsDrawing(true);
           updateCurrentPath([{ x: locationX, y: locationY }]);
         },
         onPanResponderMove: evt => {
           if (!isDrawingRef.current) return;
           const { locationX, locationY } = evt.nativeEvent;
+          const now =
+            typeof evt.nativeEvent.timestamp === 'number'
+              ? evt.nativeEvent.timestamp
+              : Date.now();
+          if (now - lastSampleTimeRef.current < samplingIntervalMs) return;
+          lastSampleTimeRef.current = now;
+
+          const origin = originRef.current;
+          if (!origin) return;
           const newPath = [
             ...currentPathRef.current,
             { x: locationX, y: locationY },
+          ];
+          const newLocalRoute = [
+            ...localRouteRef.current,
+            { x: locationX - origin.x, y: locationY - origin.y },
           ];
 
           if (pathCrossesItself(newPath)) {
             setIsDrawing(false);
             updateCurrentPath([]);
+            localRouteRef.current = [];
+            originRef.current = null;
             setShowInvalidMessage(true);
             return;
           }
 
+          localRouteRef.current = newLocalRoute;
           updateCurrentPath(newPath);
         },
         onPanResponderRelease: () => {
@@ -89,8 +119,14 @@ export function DrawRouteScreen({ navigation }: Props) {
 
           if (currentPathRef.current.length < 10) {
             updateCurrentPath([]);
+            localRouteRef.current = [];
+            originRef.current = null;
             setShowInvalidMessage(true);
           } else {
+            const finalPoint =
+              localRouteRef.current[localRouteRef.current.length - 1] ?? null;
+            console.log('Route points (local):', localRouteRef.current);
+            console.log('Final point (local):', finalPoint);
             setShowConfirmDialog(true);
           }
         },
@@ -99,8 +135,14 @@ export function DrawRouteScreen({ navigation }: Props) {
           setIsDrawing(false);
           if (currentPathRef.current.length < 10) {
             updateCurrentPath([]);
+            localRouteRef.current = [];
+            originRef.current = null;
             setShowInvalidMessage(true);
           } else {
+            const finalPoint =
+              localRouteRef.current[localRouteRef.current.length - 1] ?? null;
+            console.log('Route points (local):', localRouteRef.current);
+            console.log('Final point (local):', finalPoint);
             setShowConfirmDialog(true);
           }
         },
@@ -111,12 +153,16 @@ export function DrawRouteScreen({ navigation }: Props) {
   const handleConfirmYes = () => {
     setAllPaths([...allPathsRef.current, currentPathRef.current]);
     updateCurrentPath([]);
+    localRouteRef.current = [];
+    originRef.current = null;
     setShowConfirmDialog(false);
     navigation.navigate('Loading');
   };
 
   const handleConfirmNo = () => {
     updateCurrentPath([]);
+    localRouteRef.current = [];
+    originRef.current = null;
     setShowConfirmDialog(false);
   };
 
