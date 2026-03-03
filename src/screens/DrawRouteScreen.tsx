@@ -23,6 +23,7 @@ export function DrawRouteScreen({ navigation }: Props) {
   const samplingIntervalMs = 1000 / samplingHz;
   const fieldWidthYards = 53.3;
   const fieldLengthYards = 60;
+  const wsUrl = 'ws://10.0.0.204:8765';
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPath, setCurrentPath] = useState<Point[]>([]);
@@ -178,14 +179,36 @@ export function DrawRouteScreen({ navigation }: Props) {
         y: round3(point.y),
       }));
     const finalPoint = roundedRoute[roundedRoute.length - 1] ?? null;
+    const totalDistance = finalPoint ? finalPoint.y : null;
+    const angleDeg = finalPoint
+      ? round3((Math.atan2(finalPoint.x, finalPoint.y) * 180) / Math.PI)
+      : null;
 
     const pointsPreview = roundedRoute.map(formatPoint).join(', ');
     const output = [
       'Route (local yards, origin at JUGS center x=0, y=0):',
       `Points (${roundedRoute.length}): [${pointsPreview}]`,
+      `Total Distance: ${totalDistance !== null ? totalDistance.toFixed(3) : 'N/A'}`,
+      `Angle: ${angleDeg !== null ? `${angleDeg.toFixed(3)}` : 'N/A'}`,
       `Final: ${finalPoint ? formatPoint(finalPoint) : 'N/A'}`,
     ].join('\n');
     console.log(output);
+
+    if (totalDistance !== null && angleDeg !== null) {
+      const ws = new WebSocket(wsUrl);
+      ws.onopen = () => {
+        ws.send(
+          JSON.stringify({
+            angle: angleDeg,
+            distance: totalDistance,
+          }),
+        );
+        ws.close();
+      };
+      ws.onerror = error => {
+        console.warn('WebSocket send failed', error);
+      };
+    }
 
     setAllPaths([...allPathsRef.current, currentPathRef.current]);
     updateCurrentPath([]);
